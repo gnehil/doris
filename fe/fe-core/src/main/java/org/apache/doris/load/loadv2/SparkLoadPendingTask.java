@@ -17,6 +17,7 @@
 
 package org.apache.doris.load.loadv2;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.doris.analysis.BrokerDesc;
 import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.FunctionCallExpr;
@@ -45,6 +46,7 @@ import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.MetaLockUtils;
+import org.apache.doris.common.util.RangeUtils;
 import org.apache.doris.load.BrokerFileGroup;
 import org.apache.doris.load.BrokerFileGroupAggInfo.FileGroupAggKey;
 import org.apache.doris.load.FailMsg;
@@ -331,7 +333,16 @@ public class SparkLoadPendingTask extends LoadTask {
                 partitionColumnRefs.add(column.getName());
             }
 
-            for (Map.Entry<Long, PartitionItem> entry : rangePartitionInfo.getPartitionItemEntryList(false, true)) {
+            List<Map.Entry<Long, PartitionItem>> partitionList = rangePartitionInfo.getPartitionItemEntryList(false, false);
+            List<Map.Entry<Long, PartitionItem>> tempPartitionList = rangePartitionInfo.getPartitionItemEntryList(true, false);
+
+            List<Map.Entry<Long, PartitionItem>> partitionItemEntryList =
+                    Lists.newArrayListWithCapacity(partitionList.size() + tempPartitionList.size());
+            partitionItemEntryList.addAll(partitionList);
+            partitionItemEntryList.addAll(tempPartitionList);
+            partitionItemEntryList.sort(RangeUtils.RANGE_MAP_ENTRY_COMPARATOR);
+
+            for (Map.Entry<Long, PartitionItem> entry : partitionItemEntryList) {
                 long partitionId = entry.getKey();
                 if (!partitionIds.contains(partitionId)) {
                     continue;

@@ -17,6 +17,7 @@
 
 package org.apache.doris.load.loadv2.dpp;
 
+import com.google.common.collect.Sets;
 import org.apache.doris.common.SparkDppException;
 import org.apache.doris.load.loadv2.etl.EtlJobConfig;
 import com.google.common.base.Strings;
@@ -191,11 +192,24 @@ public final class SparkDpp implements java.io.Serializable {
                                                             String pathPattern,
                                                              long tableId,
                                                              EtlJobConfig.EtlIndex indexMeta,
-                                                             SparkRDDAggregator[] sparkRDDAggregators) throws SparkDppException {
+                                                             SparkRDDAggregator[] sparkRDDAggregators,
+                                                       EtlJobConfig.EtlPartitionInfo partitionInfo) throws SparkDppException {
         // TODO(wb) should deal largeint as BigInteger instead of string when using biginteger as key,
         // data type may affect sorting logic
         StructType dstSchema = DppUtils.createDstTableSchema(indexMeta.columns, false, true);
         ExpressionEncoder encoder = RowEncoder.apply(dstSchema);
+
+        final Set<Integer> removeKeyIndexes = new HashSet<>();
+        int removeKeyIdx = 0;
+        Set<String> partitionColumnRefs = Sets.newHashSet(partitionInfo.partitionColumnRefs);
+        for (EtlJobConfig.EtlColumn column : indexMeta.columns) {
+            if (partitionColumnRefs.contains(column.columnName) || column.isKey) {
+                if (partitionColumnRefs.contains(column.columnName) && !column.isKey) {
+                    removeKeyIndexes.add(removeKeyIdx);
+                }
+                removeKeyIdx++;
+            }
+        }
 
         resultRDD.repartitionAndSortWithinPartitions(new BucketPartitioner(bucketKeyMap), new BucketComparator())
         .foreachPartition(new VoidFunction<Iterator<Tuple2<List<Object>,Object[]>>>() {
@@ -223,7 +237,9 @@ public final class SparkDpp implements java.io.Serializable {
                     String curBucketKey = keyColumns.get(0).toString();
                     List<Object> columnObjects = new ArrayList<>();
                     for (int i = 1; i < keyColumns.size(); ++i) {
-                        columnObjects.add(keyColumns.get(i));
+                        if (!removeKeyIndexes.contains(i - 1)) {
+                            columnObjects.add(keyColumns.get(i));
+                        }
                     }
                     for (int i = 0; i < valueColumns.length; ++i) {
                         columnObjects.add(sparkRDDAggregators[i].finalize(valueColumns[i]));
@@ -287,7 +303,8 @@ public final class SparkDpp implements java.io.Serializable {
     // TODO(wb) one shuffle to calculate the rollup in the same level
     private void processRollupTree(RollupTreeNode rootNode,
                                    JavaPairRDD<List<Object>, Object[]> rootRDD,
-                                   long tableId, EtlJobConfig.EtlIndex baseIndex) throws SparkDppException {
+                                   long tableId, EtlJobConfig.EtlIndex baseIndex,
+                                   EtlJobConfig.EtlPartitionInfo partitionInfo) throws SparkDppException {
         Queue<RollupTreeNode> nodeQueue = new LinkedList<>();
         nodeQueue.offer(rootNode);
         int currentLevel = 0;
@@ -334,7 +351,7 @@ public final class SparkDpp implements java.io.Serializable {
                 curRDD.persist(StorageLevel.MEMORY_AND_DISK());
             }
             // repartition and write to hdfs
-            writeRepartitionAndSortedRDDToParquet(curRDD, pathPattern, tableId, curNode.indexMeta, sparkRDDAggregators);
+            writeRepartitionAndSortedRDDToParquet(curRDD, pathPattern, tableId, curNode.indexMeta, sparkRDDAggregators, partitionInfo);
         }
     }
 
@@ -450,9 +467,19 @@ public final class SparkDpp implements java.io.Serializable {
         }
 
         List<ColumnParser> parsers = new ArrayList<>();
+        int removeKeyIdx = 0;
+        final Set<Integer> removeKeyIndexes = new HashSet<>();
+        Set<String> partitionColumnRefs = Sets.newHashSet(partitionInfo.partitionColumnRefs);
         for (EtlJobConfig.EtlColumn column : baseIndex.columns) {
             parsers.add(ColumnParser.create(column));
+            if (partitionColumnRefs.contains(column.columnName) || column.isKey) {
+                if (partitionColumnRefs.contains(column.columnName) && !column.isKey) {
+                    removeKeyIndexes.add(removeKeyIdx);
+                }
+                removeKeyIdx++;
+            }
         }
+        LOG.info("removeKeyIndexes: [{}]", StringUtils.join(removeKeyIndexes, ","));
 
         // use PairFlatMapFunction instead of PairMapFunction because the there will be
         // 0 or 1 output row for 1 input row
@@ -465,17 +492,19 @@ public final class SparkDpp implements java.io.Serializable {
                 for (int i = 0; i < keyColumnNames.size(); i++) {
                     String columnName = keyColumnNames.get(i);
                     Object columnObject = row.get(row.fieldIndex(columnName));
-                    if(!validateData(columnObject, baseIndex.getColumn(columnName), parsers.get(i), row)) {
-                        abnormalRowAcc.add(1);
-                        return result.iterator();
-                    };
+                    if (!removeKeyIndexes.contains(i)) {
+                        if(!validateData(columnObject, baseIndex.getColumn(columnName), parsers.get(i), row)) {
+                            abnormalRowAcc.add(1);
+                            return result.iterator();
+                        }
+                    }
                     keyColumns.add(columnObject);
                 }
 
                 for (int i = 0; i < valueColumnNames.size(); i++) {
                     String columnName = valueColumnNames.get(i);
                     Object columnObject = row.get(row.fieldIndex(columnName));
-                    if(!validateData(columnObject,  baseIndex.getColumn(columnName), parsers.get(i + keyColumnNames.size()),row)) {
+                    if(!validateData(columnObject,  baseIndex.getColumn(columnName), parsers.get(i + keyColumnNames.size() - removeKeyIndexes.size()),row)) {
                         abnormalRowAcc.add(1);
                         return result.iterator();
                     };
@@ -1030,30 +1059,40 @@ public final class SparkDpp implements java.io.Serializable {
                     }
                 }
 
-                // get key column names and value column names seperately
+                // get key column names and value column names separately
                 List<String> keyColumnNames = new ArrayList<>();
                 List<String> valueColumnNames = new ArrayList<>();
-                for (EtlJobConfig.EtlColumn etlColumn : baseIndex.columns) {
-                    if (etlColumn.isKey) {
-                        keyColumnNames.add(etlColumn.columnName);
+
+                EtlJobConfig.EtlPartitionInfo partitionInfo = etlTable.partitionInfo;
+                List<Integer> partitionKeyIndex = new ArrayList<>();
+                List<Class> partitionKeySchema = new ArrayList<>();
+
+                Set<String> partitionKeySet = Sets.newHashSet(partitionInfo.partitionColumnRefs);
+                // partition key index of key columns
+                int keyIdx = 0;
+                for (EtlJobConfig.EtlColumn column : baseIndex.columns) {
+                    if (column.isKey) {
+                        keyColumnNames.add(column.columnName);
+                        if (partitionKeySet.contains(column.columnName)) {
+                            partitionKeyIndex.add(keyIdx);
+                            partitionKeySchema.add(DppUtils.getClassFromColumn(column));
+                        }
+                        keyIdx++;
                     } else {
-                        valueColumnNames.add(etlColumn.columnName);
+                        if (partitionKeySet.contains(column.columnName)) {
+                            keyColumnNames.add(column.columnName);
+                            partitionKeyIndex.add(keyIdx++);
+                            partitionKeySchema.add(DppUtils.getClassFromColumn(column));
+                        }
+                        valueColumnNames.add(column.columnName);
                     }
                 }
 
-                EtlJobConfig.EtlPartitionInfo partitionInfo = etlTable.partitionInfo;
-                List<Integer> partitionKeyIndex = new ArrayList<Integer>();
-                List<Class> partitionKeySchema = new ArrayList<>();
-                for (String key : partitionInfo.partitionColumnRefs) {
-                    for (int i = 0; i < baseIndex.columns.size(); ++i) {
-                        EtlJobConfig.EtlColumn column = baseIndex.columns.get(i);
-                        if (column.columnName.equals(key)) {
-                            partitionKeyIndex.add(i);
-                            partitionKeySchema.add(DppUtils.getClassFromColumn(column));
-                            break;
-                        }
-                    }
-                }
+                LOG.info("keyColumnNames: [{}]", StringUtils.join(keyColumnNames, ","));
+                LOG.info("valueColumnNames: [{}]", StringUtils.join(valueColumnNames, ","));
+                LOG.info("partitionKeyIndex: [{}]", StringUtils.join(partitionKeyIndex, ","));
+                LOG.info("partitionKeySchema: [{}]", StringUtils.join(partitionKeySchema, ","));
+
                 List<DorisRangePartitioner.PartitionRangeKey> partitionRangeKeys = createPartitionRangeKeys(partitionInfo, partitionKeySchema);
                 StructType dstTableSchema = DppUtils.createDstTableSchema(baseIndex.columns, false, false);
                 dstTableSchema = DppUtils.replaceBinaryColsInSchema(binaryBitmapColumnSet, dstTableSchema);
@@ -1091,7 +1130,7 @@ public final class SparkDpp implements java.io.Serializable {
                         tablePairRDD.union(ret);
                     }
                 }
-                processRollupTree(rootNode, tablePairRDD, tableId, baseIndex);
+                processRollupTree(rootNode, tablePairRDD, tableId, baseIndex, partitionInfo);
             }
             LOG.info("invalid rows contents:" + invalidRows.value());
             dppResult.isSuccess = true;
