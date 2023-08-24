@@ -170,12 +170,14 @@ public class SparkEtlJobHandler {
             }
             appId = handle.getAppId();
             state = handle.getState();
+            LOG.info("spark app state: " + state.toString() + ", loadJobId:" + loadJobId);
         } catch (IOException e) {
             LOG.warn(errMsg, e);
             throw new LoadException(errMsg + e.getMessage());
         }
 
         if (fromSparkState(state) == TEtlState.CANCELLED) {
+            LOG.warn("spark app state cancelled: " + state.toString() + ", loadJobId:" + loadJobId);
             throw new LoadException(errMsg + "spark app state: " + state.toString() + ", loadJobId:" + loadJobId);
         }
 
