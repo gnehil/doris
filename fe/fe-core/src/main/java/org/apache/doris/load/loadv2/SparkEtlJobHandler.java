@@ -130,11 +130,13 @@ public class SparkEtlJobHandler {
         Map<String, String> envParams = resource.getEnvConfigsWithoutPrefix();
         LOG.info("submit etl job,env:{}", envParams);
 
+        SparkLauncher launcher;
+
         try {
 
             LOG.info("spark launcher init start");
 
-            SparkLauncher launcher = new SparkLauncher(envParams);
+            launcher = new SparkLauncher(envParams);
             // master      |  deployMode
             // ------------|-------------
             // yarn        |  cluster
