@@ -130,26 +130,41 @@ public class SparkEtlJobHandler {
         Map<String, String> envParams = resource.getEnvConfigsWithoutPrefix();
         LOG.info("submit etl job,env:{}", envParams);
 
-        SparkLauncher launcher = new SparkLauncher(envParams);
-        // master      |  deployMode
-        // ------------|-------------
-        // yarn        |  cluster
-        // spark://xx  |  client
-        launcher.setMaster(resource.getMaster())
-                .setDeployMode(resource.getDeployMode().name().toLowerCase())
-                .setAppResource(appResourceHdfsPath)
-                .setMainClass(SPARK_ETL_JOB_CLASS)
-                .setAppName(String.format(ETL_JOB_NAME, loadLabel))
-                .setSparkHome(sparkHome)
-                .addAppArgs(jobConfigHdfsPath)
-                .redirectError();
+        try {
 
-        // spark configs
-        for (Map.Entry<String, String> entry : resource.getSparkConfigs().entrySet()) {
-            launcher.setConf(entry.getKey(), entry.getValue());
+            LOG.info("spark launcher init start");
+
+            SparkLauncher launcher = new SparkLauncher(envParams);
+            // master      |  deployMode
+            // ------------|-------------
+            // yarn        |  cluster
+            // spark://xx  |  client
+            launcher.setMaster(resource.getMaster())
+                    .setDeployMode(resource.getDeployMode().name().toLowerCase())
+                    .setAppResource(appResourceHdfsPath)
+                    .setMainClass(SPARK_ETL_JOB_CLASS)
+                    .setAppName(String.format(ETL_JOB_NAME, loadLabel))
+                    .setSparkHome(sparkHome)
+                    .addAppArgs(jobConfigHdfsPath)
+                    .redirectError();
+
+            LOG.info("spark launcher init finished");
+
+            LOG.info("spark conf set start");
+
+            // spark configs
+            for (Map.Entry<String, String> entry : resource.getSparkConfigs().entrySet()) {
+                launcher.setConf(entry.getKey(), entry.getValue());
+            }
+
+            LOG.info("spark conf set finished");
+
+        } catch (Throwable e) {
+            LOG.error("build spark launcher error: {}", ExceptionUtils.getStackTrace(e));
+            throw e;
         }
 
-        LOG.info("spark conf set finished");
+
 
         // start app
         State state = null;
