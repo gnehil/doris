@@ -39,6 +39,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
+import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
@@ -148,12 +149,16 @@ public class SparkEtlJobHandler {
             launcher.setConf(entry.getKey(), entry.getValue());
         }
 
+        LOG.info("spark conf set finished");
+
         // start app
         State state = null;
         String appId = null;
         String errMsg = "start spark app failed. error: ";
         try {
+            LOG.info("launch spark start");
             Process process = launcher.launch();
+            LOG.info("launch spark end");
             handle.setProcess(process);
             if (!FeConstants.runningUnitTest) {
                 SparkLauncherMonitor.LogMonitor logMonitor =
@@ -165,6 +170,7 @@ public class SparkEtlJobHandler {
                     logMonitor.join();
                 } catch (InterruptedException e) {
                     logMonitor.interrupt();
+                    LOG.error("spark launcher monitor start failed, error: {}", ExceptionUtils.getStackTrace(e));
                     throw new LoadException(errMsg + e.getMessage());
                 }
             }
