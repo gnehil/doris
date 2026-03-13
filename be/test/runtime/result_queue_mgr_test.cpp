@@ -155,4 +155,34 @@ TEST_F(ResultQueueMgrTest, cancel_no_block) {
     EXPECT_TRUE(block_queue_t != nullptr);
     EXPECT_TRUE(queue_mgr.cancel(query_id).ok());
 }
+
+// Test that fetch_result returns error status after cancel
+// This is a regression test for CIR-19495: external scanner returns OK + eos=true
+// when query is cancelled due to E-230 (VERSION_ALREADY_MERGED) error
+TEST_F(ResultQueueMgrTest, fetch_result_after_cancel_returns_error) {
+    TUniqueId query_id;
+    query_id.lo = 10;
+    query_id.hi = 100;
+    ResultQueueMgr queue_mgr;
+
+    BlockQueueSharedPtr block_queue_t;
+    queue_mgr.create_queue(query_id, &block_queue_t);
+    EXPECT_TRUE(block_queue_t != nullptr);
+
+    // Cancel the query (simulating E-230 error)
+    EXPECT_TRUE(queue_mgr.cancel(query_id).ok());
+
+    // Fetch result after cancel - should return error status, not OK
+    std::shared_ptr<arrow::RecordBatch> result;
+    bool eos;
+    auto st = queue_mgr.fetch_result(query_id, &result, &eos);
+
+    // After cancel, fetch_result should return error status, not OK
+    // This ensures that external scanner clients can detect the query failure
+    EXPECT_FALSE(st.ok());
+    EXPECT_TRUE(st.is<ErrorCode::CANCELLED>() || st.is<ErrorCode::INTERNAL_ERROR>());
+
+    // eos should be true since the queue is shutdown
+    EXPECT_TRUE(eos);
+}
 } // namespace doris
