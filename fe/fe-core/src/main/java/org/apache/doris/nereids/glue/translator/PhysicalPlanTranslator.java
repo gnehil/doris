@@ -1336,6 +1336,17 @@ public class PhysicalPlanTranslator extends DefaultPlanVisitor<PlanFragment, Pla
         TableFunctionNode tableFunctionNode = new TableFunctionNode(context.nextPlanNodeId(),
                 currentFragment.getPlanRoot(), tupleDescriptor.getId(), functionCalls, outputSlotIds);
         tableFunctionNode.setNereidsId(generate.getId());
+
+        // Materialize generate output into a standalone tuple immediately.
+        // Otherwise upper sort/aggregate nodes may keep referencing the mixed child/generator
+        // tuples directly, which can lead to wrong results when ordering or aggregating on
+        // child columns carried through the table function.
+        List<Expr> projectionExprs = generate.getOutput().stream()
+                .map(e -> ExpressionTranslator.translate(e, context))
+                .collect(Collectors.toList());
+        TupleDescriptor outputTupleDesc = generateTupleDesc(generate.getOutput(), null, context);
+        tableFunctionNode.setProjectList(projectionExprs);
+        tableFunctionNode.setOutputTupleDesc(outputTupleDesc);
         addPlanRoot(currentFragment, tableFunctionNode, generate);
         return currentFragment;
     }
