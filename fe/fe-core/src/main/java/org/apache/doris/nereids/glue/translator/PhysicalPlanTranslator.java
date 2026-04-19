@@ -389,6 +389,7 @@ public class PhysicalPlanTranslator extends DefaultPlanVisitor<PlanFragment, Pla
             inputFragment.setDestination(exchangeNode);
             inputFragment.setOutputPartition(dataPartition);
             DataStreamSink streamSink = new DataStreamSink(exchangeNode.getId());
+            inheritProjectionToDataStreamSink(inputFragment.getPlanRoot(), exchangeNode, streamSink);
             streamSink.setOutputPartition(dataPartition);
             inputFragment.setSink(streamSink);
         }
@@ -1897,6 +1898,7 @@ public class PhysicalPlanTranslator extends DefaultPlanVisitor<PlanFragment, Pla
                 inputFragment.setOutputPartition(DataPartition.UNPARTITIONED);
 
                 DataStreamSink sink = new DataStreamSink(exchangeNode.getId());
+                inheritProjectionToDataStreamSink(inputFragment.getPlanRoot(), exchangeNode, sink);
                 sink.setOutputPartition(DataPartition.UNPARTITIONED);
                 inputFragment.setSink(sink);
 
@@ -2096,6 +2098,15 @@ public class PhysicalPlanTranslator extends DefaultPlanVisitor<PlanFragment, Pla
             }
         }
         return inputFragment;
+    }
+
+    private void inheritProjectionToDataStreamSink(PlanNode inputPlanNode, ExchangeNode exchangeNode,
+            DataStreamSink dataStreamSink) {
+        if (CollectionUtils.isNotEmpty(inputPlanNode.getProjectList())) {
+            dataStreamSink.setProjections(inputPlanNode.getProjectList());
+            dataStreamSink.setOutputTupleDesc(inputPlanNode.getOutputTupleDesc());
+            exchangeNode.updateTupleIds(inputPlanNode.getOutputTupleDesc());
+        }
     }
 
     /**

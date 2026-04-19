@@ -57,6 +57,22 @@ suite("explode_json_array_parent_slot") {
         LIMIT 6;
     """
 
+    qt_explode_order_by_parent_slot_outer_inline_view """
+        SELECT import_time
+        FROM (
+            SELECT *
+            FROM (
+                SELECT
+                    import_time,
+                    CAST(jsonb_extract_string(data, '$.data.data.pages\\.ranking\\.products') AS JSON) AS arr
+                FROM explode_json_array_parent_slot
+            ) s
+            LATERAL VIEW explode_json_array_json(CAST(arr AS TEXT)) tmp AS elem
+        ) t
+        ORDER BY import_time DESC
+        LIMIT 6;
+    """
+
     qt_explode_max_parent_slot """
         SELECT MAX(import_time)
         FROM (
@@ -68,6 +84,20 @@ suite("explode_json_array_parent_slot") {
         LATERAL VIEW explode_json_array_json(CAST(arr AS TEXT)) tmp AS elem;
     """
 
+    qt_explode_max_parent_slot_outer_inline_view """
+        SELECT MAX(import_time)
+        FROM (
+            SELECT *
+            FROM (
+                SELECT
+                    import_time,
+                    CAST(jsonb_extract_string(data, '$.data.data.pages\\.ranking\\.products') AS JSON) AS arr
+                FROM explode_json_array_parent_slot
+            ) s
+            LATERAL VIEW explode_json_array_json(CAST(arr AS TEXT)) tmp AS elem
+        ) t;
+    """
+
     qt_explode_distinct_parent_slot """
         SELECT DISTINCT import_time
         FROM (
@@ -77,6 +107,21 @@ suite("explode_json_array_parent_slot") {
             FROM explode_json_array_parent_slot
         ) s
         LATERAL VIEW explode_json_array_json(CAST(arr AS TEXT)) tmp AS elem
+        ORDER BY import_time DESC;
+    """
+
+    qt_explode_distinct_parent_slot_outer_inline_view """
+        SELECT DISTINCT import_time
+        FROM (
+            SELECT *
+            FROM (
+                SELECT
+                    import_time,
+                    CAST(jsonb_extract_string(data, '$.data.data.pages\\.ranking\\.products') AS JSON) AS arr
+                FROM explode_json_array_parent_slot
+            ) s
+            LATERAL VIEW explode_json_array_json(CAST(arr AS TEXT)) tmp AS elem
+        ) t
         ORDER BY import_time DESC;
     """
 }
